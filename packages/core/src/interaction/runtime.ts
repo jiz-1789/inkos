@@ -2,7 +2,7 @@ import type { AutomationMode } from "./modes.js";
 import { routeInteractionRequest } from "./request-router.js";
 import type { InteractionRequest } from "./intents.js";
 import type { ExecutionState, InteractionEvent } from "./events.js";
-import type { PendingDecision, InteractionSession, DraftRound } from "./session.js";
+import type { PendingDecision, InteractionSession } from "./session.js";
 import {
   appendInteractionEvent,
   bindActiveBook,
@@ -17,10 +17,6 @@ type RuntimeLanguage = "zh" | "en";
 
 export interface InteractionRuntimeTools {
   readonly listBooks: () => Promise<ReadonlyArray<string>>;
-  readonly developBookDraft?: (
-    input: string,
-    existingDraft?: InteractionSession["creationDraft"],
-  ) => Promise<unknown>;
   readonly createBook?: (input: {
     readonly title: string;
     readonly genre?: string;
@@ -175,15 +171,6 @@ function buildTaskStartedState(
         stageLabel: localize(language, {
           zh: "准备章节输入",
           en: "preparing chapter inputs",
-        }),
-      };
-    case "develop_book":
-      return {
-        status: "planning",
-        bookId: request.bookId ?? session.activeBookId,
-        stageLabel: localize(language, {
-          zh: "收敛创作草案",
-          en: "developing book draft",
         }),
       };
     case "create_book":
@@ -358,58 +345,6 @@ async function handleDraftLifecycleRequest(params: {
   const { language, addEvent, markCompleted } = helpers;
 
   switch (request.intent) {
-    case "develop_book": {
-      if (!tools.developBookDraft) {
-        throw new Error(localize(language, {
-          zh: "创作草案会话暂未实现。",
-          en: "Book-draft ideation is not implemented yet.",
-        }));
-      }
-      if (!request.instruction) {
-        throw new Error(localize(language, {
-          zh: "创作草案需要一条用户输入。",
-          en: "Book-draft ideation requires user input.",
-        }));
-      }
-      const toolResult = await tools.developBookDraft(request.instruction, session.creationDraft);
-      const metadata = extractToolMetadata(toolResult);
-      const draft = metadata.details?.creationDraft as InteractionSession["creationDraft"] | undefined;
-      if (!draft) {
-        throw new Error(localize(language, {
-          zh: "创作草案工具没有返回草案数据。",
-          en: "Book-draft tool did not return draft data.",
-        }));
-      }
-      const newRound: DraftRound = {
-        roundId: (session.draftRounds?.length ?? 0) + 1,
-        userMessage: request.instruction ?? "",
-        assistantRaw: metadata.details?.draftRaw as string ?? "",
-        fieldsUpdated: (metadata.details?.fieldsUpdated as string[]) ?? [],
-        summary: metadata.details?.draftSummary as string ?? "",
-        timestamp: Date.now(),
-      };
-      const withDraft = updateCreationDraft(session, draft);
-      const withRounds = {
-        ...withDraft,
-        draftRounds: [...(withDraft.draftRounds ?? []), newRound],
-      };
-      const nextSession = appendToolEvents(withRounds, metadata.events);
-      const completed = {
-        ...markCompleted(nextSession),
-        currentExecution: metadata.currentExecution ?? markCompleted(nextSession).currentExecution,
-      };
-      return {
-        session: addEvent(completed, "task.completed", "completed", localize(language, {
-          zh: "已更新创作草案。",
-          en: "Updated the book draft.",
-        })),
-        responseText: metadata.responseText ?? localize(language, {
-          zh: "已更新创作草案。",
-          en: "Updated the book draft.",
-        }),
-        details: metadata.details,
-      };
-    }
     case "show_book_draft": {
       if (!session.creationDraft) {
         return {

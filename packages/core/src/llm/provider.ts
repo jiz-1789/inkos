@@ -1,18 +1,13 @@
 import type { LLMConfig } from "../models/project.js";
 import {
   streamSimple as piStreamSimple,
-  stream as piStream,
   completeSimple as piCompleteSimple,
-  complete as piComplete,
 } from "@mariozechner/pi-ai";
 import type {
   Api as PiApi,
   Model as PiModel,
   Context as PiContext,
   AssistantMessageEvent,
-  Tool as PiTool,
-  TextContent as PiTextContent,
-  ToolCall as PiToolCall,
 } from "@mariozechner/pi-ai";
 import { resolveServicePreset } from "./service-presets.js";
 import { getEndpoint } from "./providers/index.js";
@@ -143,31 +138,6 @@ export interface LLMClient {
     readonly thinkingBudget: number;
     readonly extra: Record<string, unknown>;
   };
-}
-
-// === Tool-calling Types ===
-
-export interface ToolDefinition {
-  readonly name: string;
-  readonly description: string;
-  readonly parameters: Record<string, unknown>;
-}
-
-export interface ToolCall {
-  readonly id: string;
-  readonly name: string;
-  readonly arguments: string;
-}
-
-export type AgentMessage =
-  | { readonly role: "system"; readonly content: string }
-  | { readonly role: "user"; readonly content: string }
-  | { readonly role: "assistant"; readonly content: string | null; readonly toolCalls?: ReadonlyArray<ToolCall> }
-  | { readonly role: "tool"; readonly toolCallId: string; readonly content: string };
-
-export interface ChatWithToolsResult {
-  readonly content: string;
-  readonly toolCalls: ReadonlyArray<ToolCall>;
 }
 
 // === Factory ===
@@ -385,31 +355,6 @@ function estimateJsonTokens(value: unknown): number {
 
 function estimateLLMMessagesTokens(messages: ReadonlyArray<LLMMessage>): number {
   return messages.reduce((total, message) => total + estimateTextTokens(message.content), 0);
-}
-
-function estimateAgentMessagesTokens(messages: ReadonlyArray<AgentMessage>): number {
-  let total = 0;
-  for (const message of messages) {
-    if (message.role === "assistant") {
-      total += estimateTextTokens(message.content ?? "");
-      for (const call of message.toolCalls ?? []) {
-        total += estimateTextTokens(call.name);
-        total += estimateTextTokens(call.arguments);
-      }
-      continue;
-    }
-    if (message.role === "tool") {
-      total += estimateTextTokens(message.toolCallId);
-      total += estimateTextTokens(message.content);
-      continue;
-    }
-    total += estimateTextTokens(message.content);
-  }
-  return total;
-}
-
-function estimateToolsTokens(tools: ReadonlyArray<ToolDefinition>): number {
-  return estimateTextTokens(JSON.stringify(tools));
 }
 
 type PiMessageContent = PiContext["messages"][number]["content"];
@@ -1235,40 +1180,6 @@ export async function chatCompletion(
   }
 }
 
-// === Tool-calling Chat (used by agent loop) ===
-
-export async function chatWithTools(
-  client: LLMClient,
-  model: string,
-  messages: ReadonlyArray<AgentMessage>,
-  tools: ReadonlyArray<ToolDefinition>,
-  options?: {
-    readonly temperature?: number;
-    readonly maxTokens?: number;
-  },
-): Promise<ChatWithToolsResult> {
-  const errorCtx = { baseUrl: client._piModel?.baseUrl ?? "(unknown)", model, service: client.service };
-  try {
-    const resolved = {
-      temperature: clampTemperatureForModel(
-        client.service,
-        model,
-        options?.temperature ?? client.defaults.temperature,
-      ),
-      maxTokens: options?.maxTokens ?? client.defaults.maxTokens,
-    };
-    assertWithinContextWindow({
-      piModel: resolvePiModel(client, model),
-      model,
-      estimatedInputTokens: estimateAgentMessagesTokens(messages) + estimateToolsTokens(tools),
-      reservedOutputTokens: resolved.maxTokens,
-    });
-    return await chatWithToolsViaPiAi(client, model, messages, tools, resolved);
-  } catch (error) {
-    throw wrapLLMError(error, errorCtx);
-  }
-}
-
 // === pi-ai Unified Implementation ===
 
 /**
@@ -1306,66 +1217,6 @@ function toPiContext(messages: ReadonlyArray<LLMMessage>): PiContext {
       };
     });
   return { systemPrompt, messages: piMessages };
-}
-
-/** Convert inkos AgentMessage[] to pi-ai Context (with tool calls/results). */
-function agentMessagesToPiContext(messages: ReadonlyArray<AgentMessage>): PiContext {
-  const systemParts = messages.filter((m) => m.role === "system").map((m) => (m as { content: string }).content);
-  const systemPrompt = systemParts.length > 0 ? systemParts.join("\n\n") : undefined;
-  const piMessages: PiContext["messages"] = [];
-  for (const msg of messages) {
-    if (msg.role === "system") continue;
-    if (msg.role === "user") {
-      piMessages.push({ role: "user", content: msg.content, timestamp: Date.now() });
-      continue;
-    }
-    if (msg.role === "assistant") {
-      const content: (PiTextContent | PiToolCall)[] = [];
-      if (msg.content) content.push({ type: "text", text: msg.content });
-      if (msg.toolCalls) {
-        for (const tc of msg.toolCalls) {
-          content.push({
-            type: "toolCall",
-            id: tc.id,
-            name: tc.name,
-            arguments: JSON.parse(tc.arguments),
-          });
-        }
-      }
-      if (content.length === 0) content.push({ type: "text", text: "" });
-      piMessages.push({
-        role: "assistant",
-        content,
-        api: "openai-completions" as PiApi,
-        provider: "openai",
-        model: "",
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      });
-      continue;
-    }
-    if (msg.role === "tool") {
-      piMessages.push({
-        role: "toolResult",
-        toolCallId: msg.toolCallId,
-        toolName: "",
-        content: [{ type: "text", text: msg.content }],
-        isError: false,
-        timestamp: Date.now(),
-      });
-    }
-  }
-  return { systemPrompt, messages: piMessages };
-}
-
-/** Convert inkos ToolDefinition[] to pi-ai Tool[]. */
-function toPiTools(tools: ReadonlyArray<ToolDefinition>): PiTool[] {
-  return tools.map((t) => ({
-    name: t.name,
-    description: t.description,
-    parameters: t.parameters as PiTool["parameters"],
-  }));
 }
 
 async function chatCompletionViaPiAi(
@@ -1462,63 +1313,4 @@ async function chatCompletionViaPiAi(
       totalTokens: inputTokens + outputTokens,
     },
   };
-}
-
-async function chatWithToolsViaPiAi(
-  client: LLMClient,
-  model: string,
-  messages: ReadonlyArray<AgentMessage>,
-  tools: ReadonlyArray<ToolDefinition>,
-  resolved: { readonly temperature: number; readonly maxTokens: number },
-): Promise<ChatWithToolsResult> {
-  const piModel = resolvePiModel(client, model);
-  const context = agentMessagesToPiContext(messages);
-  context.tools = toPiTools(tools);
-  const streamOpts = {
-    temperature: resolved.temperature,
-    maxTokens: resolved.maxTokens,
-    apiKey: client._apiKey,
-    headers: mergeUserAgent(piModel.headers),
-  };
-
-  if (!client.stream) {
-    const response = await piComplete(piModel, context, streamOpts);
-    if (response.stopReason === "error" && response.errorMessage) {
-      throw new Error(response.errorMessage);
-    }
-    const content = response.content
-      .filter((block): block is { type: "text"; text: string } => block.type === "text")
-      .map((block) => block.text)
-      .join("");
-    const toolCalls = response.content
-      .filter((block): block is PiToolCall => block.type === "toolCall")
-      .map((block) => ({
-        id: block.id,
-        name: block.name,
-        arguments: JSON.stringify(block.arguments),
-      }));
-    return { content, toolCalls };
-  }
-
-  const eventStream = piStream(piModel, context, streamOpts);
-  let content = "";
-  const toolCalls: ToolCall[] = [];
-
-  for await (const event of eventStream) {
-    if (event.type === "text_delta") {
-      content += event.delta;
-    }
-    if (event.type === "toolcall_end") {
-      toolCalls.push({
-        id: event.toolCall.id,
-        name: event.toolCall.name,
-        arguments: JSON.stringify(event.toolCall.arguments),
-      });
-    }
-    if (event.type === "error" && event.error.errorMessage) {
-      throw new Error(event.error.errorMessage);
-    }
-  }
-
-  return { content, toolCalls };
 }

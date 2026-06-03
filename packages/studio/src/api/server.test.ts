@@ -17,7 +17,6 @@ const createLLMClientMock = vi.fn(() => ({}));
 const chatCompletionMock = vi.fn();
 const loadProjectConfigMock = vi.fn();
 const pipelineConfigs: unknown[] = [];
-const processProjectInteractionInputMock = vi.fn();
 const processProjectInteractionRequestMock = vi.fn();
 const createInteractionToolsFromDepsMock = vi.fn(() => ({}));
 const loadProjectSessionMock = vi.fn();
@@ -221,7 +220,6 @@ vi.mock("@actalk/inkos-core", async (importOriginal) => {
     inferLanguage: actual.inferLanguage,
     chatCompletion: chatCompletionMock,
     loadProjectConfig: loadProjectConfigMock,
-    processProjectInteractionInput: processProjectInteractionInputMock,
     processProjectInteractionRequest: processProjectInteractionRequestMock,
     createInteractionToolsFromDeps: createInteractionToolsFromDepsMock,
     loadProjectSession: loadProjectSessionMock,
@@ -362,7 +360,6 @@ describe("createStudioServer daemon lifecycle", () => {
       usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
     });
     loadProjectConfigMock.mockReset();
-    processProjectInteractionInputMock.mockReset();
     processProjectInteractionRequestMock.mockReset();
     createInteractionToolsFromDepsMock.mockReset();
     loadProjectSessionMock.mockReset();

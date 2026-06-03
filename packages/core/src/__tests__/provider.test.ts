@@ -3,7 +3,6 @@ import type { AssistantMessage, Model, Api } from "@mariozechner/pi-ai";
 import {
   __resetFixedTemperatureWarnings,
   chatCompletion,
-  chatWithTools,
   type LLMClient,
 } from "../llm/provider.js";
 
@@ -283,33 +282,6 @@ describe("chatCompletion via pi-ai", () => {
     expect(error.message).toContain("compress");
     expect(mockStreamSimple).not.toHaveBeenCalled();
     expect(mockCompleteSimple).not.toHaveBeenCalled();
-  });
-
-  it("rejects oversized tool context before sending to pi-ai", async () => {
-    const client = makeClient(0.7, {
-      stream: false,
-      _piModel: {
-        ...MOCK_PI_MODEL,
-        contextWindow: 80,
-      },
-    });
-
-    const error = await captureError(
-      chatWithTools(
-        client,
-        "test-model",
-        [
-          { role: "system", content: "系统设定".repeat(40) },
-          { role: "user", content: "用户消息".repeat(40) },
-        ],
-        [],
-        { maxTokens: 20 },
-      ),
-    );
-
-    expect(error.message).toContain("context window");
-    expect(error.message).toContain("compress");
-    expect(mockComplete).not.toHaveBeenCalled();
   });
 
   it("calls onTextDelta for each text chunk", async () => {
