@@ -1,17 +1,18 @@
 import { useEffect, useState } from "react";
-import { fetchJson, useApi, postApi } from "../hooks/use-api";
+import { fetchJson, invalidateApiPaths, useApi, postApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useI18n } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { FileInput, BookCopy, Feather, BookMarked, Wand2 } from "lucide-react";
+import { waitForStudioBookReady } from "../lib/book-ready";
 
 interface BookSummary {
   readonly id: string;
   readonly title: string;
 }
 
-interface Nav { toDashboard: () => void }
+interface Nav { toDashboard: () => void; toBook: (bookId: string) => void }
 
 type Tab = "chapters" | "canon" | "fanfic" | "spinoff" | "imitation";
 
@@ -113,12 +114,13 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
     setLoading(true);
     setStatus("");
     try {
-      const data = await fetchJson<{ bookId?: string }>("/spinoff/init", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: spTitle, parentBookId: spParent, direction: spDirection || undefined }),
-      });
+      const data = await postApi<{ bookId?: string }>("/spinoff/init", { title: spTitle, parentBookId: spParent, direction: spDirection || undefined });
       setStatus(`${t("import.spinoffDone")}: ${data.bookId}`);
+      if (data.bookId) {
+        await waitForStudioBookReady(data.bookId);
+        invalidateApiPaths(["/api/v1/books", `/api/v1/books/${data.bookId}`]);
+        nav.toBook(data.bookId);
+      }
     } catch (e) {
       setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -130,12 +132,13 @@ export function ImportManager({ nav, theme, t, initialTab }: { nav: Nav; theme: 
     setLoading(true);
     setStatus("");
     try {
-      const data = await fetchJson<{ bookId?: string }>("/imitation/init", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: imTitle, referenceText: imRef, storyIdea: imIdea, genre: imGenre, language: imLang }),
-      });
+      const data = await postApi<{ bookId?: string }>("/imitation/init", { title: imTitle, referenceText: imRef, storyIdea: imIdea, genre: imGenre, language: imLang });
       setStatus(`${t("import.imitationDone")}: ${data.bookId}`);
+      if (data.bookId) {
+        await waitForStudioBookReady(data.bookId);
+        invalidateApiPaths(["/api/v1/books", `/api/v1/books/${data.bookId}`]);
+        nav.toBook(data.bookId);
+      }
     } catch (e) {
       setStatus(`Error: ${e instanceof Error ? e.message : String(e)}`);
     }
