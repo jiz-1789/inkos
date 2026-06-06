@@ -336,6 +336,23 @@ function cloneProjectConfig() {
   return structuredClone(projectConfig);
 }
 
+async function writeCompleteBookFixture(root: string, bookId: string, title = "New Book") {
+  const bookDir = join(root, "books", bookId);
+  await mkdir(join(bookDir, "story"), { recursive: true });
+  await writeFile(join(bookDir, "book.json"), JSON.stringify({
+    id: bookId,
+    title,
+    platform: "qidian",
+    genre: "urban",
+    status: "outlining",
+    targetChapters: 100,
+    chapterWordCount: 3000,
+    createdAt: "2026-04-12T00:00:00.000Z",
+    updatedAt: "2026-04-12T00:00:00.000Z",
+  }, null, 2), "utf-8");
+  await writeFile(join(bookDir, "story", "story_bible.md"), "# Story Bible\n\nReady.\n", "utf-8");
+}
+
 describe("createStudioServer daemon lifecycle", () => {
   let root: string;
 
@@ -3433,6 +3450,7 @@ describe("createStudioServer daemon lifecycle", () => {
   });
 
   it("migrates and exposes a book created by architect even when the final agent text is empty", async () => {
+    await writeCompleteBookFixture(root, "new-book", "New Book");
     const orphanSession = {
       sessionId: "agent-session-1",
       bookId: null,
@@ -3501,6 +3519,56 @@ describe("createStudioServer daemon lifecycle", () => {
       },
     });
     expect(chatCompletionMock).not.toHaveBeenCalled();
+  }, 10_000);
+
+  it("does not treat architect_incomplete as a created book", async () => {
+    const orphanSession = {
+      sessionId: "agent-session-1",
+      bookId: null,
+      title: null,
+      messages: [],
+      events: [],
+      draftRounds: [],
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    loadBookSessionMock.mockResolvedValue(orphanSession);
+    runAgentSessionMock.mockImplementationOnce(async (config: { onEvent?: (event: unknown) => void }) => {
+      config.onEvent?.({
+        type: "tool_execution_start",
+        toolCallId: "tool-1",
+        toolName: "sub_agent",
+        args: { agent: "architect", title: "Half Built Book", bookId: "half-built-book" },
+      });
+      config.onEvent?.({
+        type: "tool_execution_end",
+        toolCallId: "tool-1",
+        toolName: "sub_agent",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "Foundation is incomplete." }],
+          details: { kind: "architect_incomplete", bookId: "half-built-book", title: "Half Built Book" },
+        },
+      });
+      return {
+        responseText: "",
+        messages: [{ role: "user", content: "写一本都市悬疑" }],
+      };
+    });
+    const { createStudioServer } = await import("./server.js");
+    const app = createStudioServer(cloneProjectConfig() as never, root);
+
+    const response = await app.request("http://localhost/api/v1/agent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instruction: "写一本都市悬疑", sessionId: "agent-session-1" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(migrateBookSessionMock).not.toHaveBeenCalled();
+    const body = await response.json();
+    expect(body.session).toMatchObject({ sessionId: "agent-session-1" });
+    expect(body.session).not.toHaveProperty("activeBookId");
   });
 
   it("rejects /api/v1/agent requests without sessionId", async () => {

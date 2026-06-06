@@ -373,6 +373,7 @@ export function createInteractionToolsFromDeps(
         __interaction: {
           responseText: `Created ${book.title} (${book.id}).`,
           details: {
+            kind: "book_created",
             bookId: book.id,
             title: book.title,
           },

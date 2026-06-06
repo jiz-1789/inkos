@@ -872,9 +872,13 @@ function resolveCreatedBookIdFromToolExecs(execs: ReadonlyArray<CollectedToolExe
     if (details?.kind === "book_created" && typeof details.bookId === "string" && details.bookId.trim()) {
       return details.bookId.trim();
     }
+  }
+  return null;
+}
 
-    const fromArgs = resolveArchitectBookIdFromArgs(exec.args);
-    if (fromArgs) return fromArgs;
+function resolveCreatedBookIdFromDetails(details: Readonly<Record<string, unknown>> | undefined): string | null {
+  if (details?.kind === "book_created" && typeof details.bookId === "string" && details.bookId.trim()) {
+    return details.bookId.trim();
   }
   return null;
 }
@@ -1738,7 +1742,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         readonly session: { readonly activeBookId?: string };
         readonly details?: Readonly<Record<string, unknown>>;
       }) => {
-        const createdBookId = (result.details?.bookId as string | undefined) ?? result.session.activeBookId ?? bookId;
+        const createdBookId = resolveCreatedBookIdFromDetails(result.details);
+        if (!createdBookId) {
+          const error = "Book creation did not produce a completed book artifact.";
+          bookCreateStatus.set(bookId, { status: "error", error });
+          broadcast("book:error", { bookId, error });
+          return;
+        }
+        if (!await completeBookExists(join(root, "books", createdBookId))) {
+          const error = "Book creation artifact is incomplete on disk.";
+          bookCreateStatus.set(createdBookId, { status: "error", error });
+          broadcast("book:error", { bookId: createdBookId, error });
+          return;
+        }
         const book = await loadStudioBookListSummary(state, createdBookId).catch(() => undefined);
         bookCreateStatus.delete(createdBookId);
         broadcast("book:created", { bookId: createdBookId, ...(book ? { book } : {}) });
@@ -3584,6 +3600,12 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string) {
         const createdBookId = resolveCreatedBookIdFromToolExecs(collectedToolExecs);
         if (!createdBookId) return null;
         if (broadcastedCreatedBookId === createdBookId) return createdBookId;
+        if (!await completeBookExists(join(root, "books", createdBookId))) {
+          const error = "Book creation artifact is incomplete on disk.";
+          bookCreateStatus.set(createdBookId, { status: "error", error });
+          broadcast("book:error", { bookId: createdBookId, sessionId: bookSession.sessionId, error });
+          return null;
+        }
 
         try {
           const migratedSession = await migrateBookSession(root, bookSession.sessionId, createdBookId);
