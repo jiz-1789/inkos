@@ -1171,10 +1171,7 @@ export function createReadTool(
     ): Promise<AgentToolResult<undefined>> {
       try {
         const filePath = resolveReadPath(booksRoot, params.path, options);
-        let content = await readFile(filePath, "utf-8");
-        if (content.length > 10_000) {
-          content = content.slice(0, 10_000) + "\n\n... [truncated at 10 000 chars]";
-        }
+        const content = await readFile(filePath, "utf-8");
         return textResult(content);
       } catch (err: any) {
         return textResult(`Failed to read "${params.path}": ${err?.message ?? String(err)}`);

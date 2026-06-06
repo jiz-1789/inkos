@@ -567,6 +567,22 @@ describe("agent deterministic writing tools", () => {
     }
   });
 
+  it("does not silently truncate long read results", async () => {
+    const longContent = `# Long File\n\n${"A".repeat(10_500)}TAIL`;
+    await writeFile(join(state.bookDir("harbor"), "story", "long.md"), longContent, "utf-8");
+    const tool = createReadTool(root);
+
+    const result = await tool.execute("tool-read-long", {
+      path: "harbor/story/long.md",
+    });
+
+    expect(result.content[0]?.type).toBe("text");
+    if (result.content[0]?.type === "text") {
+      expect(result.content[0].text).toBe(longContent);
+      expect(result.content[0].text).not.toContain("[truncated");
+    }
+  });
+
   it("reads absolute system paths when explicitly enabled", async () => {
     const outsidePath = join(root, "outside.md");
     await writeFile(outsidePath, "outside secret", "utf-8");
